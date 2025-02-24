@@ -151,7 +151,7 @@ class PrunedNN(nn.Module):
                     if nonzero_weights.numel() == 0:
                         continue  # Skip if there are no nonzero weights
                     threshold = torch.quantile(nonzero_weights, 1 - self.prune_threshold)
-                    mask = (param.abs() >= 0.1).float()
+                    mask = (param.abs() >= threshold).float()
                     self.masks[name] = mask
                     param *= mask
     
