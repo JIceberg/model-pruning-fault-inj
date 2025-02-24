@@ -31,7 +31,6 @@ test_dataset = torchvision.datasets.MNIST(root='./data', train=False, transform=
 train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False)
 
-# Define a simple neural network
 class PrunedNN(nn.Module):
     def __init__(self, input_size, hidden_size, num_classes, prune_threshold=0.4):
         super(PrunedNN, self).__init__()
@@ -166,9 +165,9 @@ class PrunedNN(nn.Module):
         zero_weights = 0
 
         for name, param in self.named_parameters():
-            if "weight" in name:  # Only count weight matrices
-                total_weights += param.numel()  # Total elements in weight matrix
-                zero_weights += torch.sum(param == 0).item()  # Count zero elements
+            if "weight" in name:
+                total_weights += param.numel()
+                zero_weights += torch.sum(param == 0).item()
 
         nonzero_weights = total_weights - zero_weights
         zero_percentage = (zero_weights / total_weights) * 100
@@ -178,7 +177,6 @@ class PrunedNN(nn.Module):
         print(f"Zero Weights: {zero_weights} ({zero_percentage:.2f}%)")
         print(f"Nonzero Weights: {nonzero_weights} ({nonzero_percentage:.2f}%)")
 
-# Initialize model, loss, and optimizer
 model = PrunedNN(input_size, hidden_size, num_classes).to(device)
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -186,16 +184,13 @@ optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 if os.path.exists("saved_model.pth"):
     model.load_state_dict(torch.load("saved_model.pth", weights_only=True))
 else:
-    # Training loop
     for epoch in range(num_epochs):
         for images, labels in train_loader:
             images, labels = images.to(device), labels.to(device)
 
-            # Forward pass
             outputs = model(images)
             loss = criterion(outputs, labels)
 
-            # Backward pass
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -215,11 +210,9 @@ else:
             for images, labels in train_loader:
                 images, labels = images.to(device), labels.to(device)
 
-                # Forward pass
                 outputs = model(images)
                 loss = criterion(outputs, labels)
 
-                # Backward pass
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -232,7 +225,6 @@ else:
 
 model.count_zero_nonzero_weights()
 
-# Evaluate model
 model.eval()
 
 correct = 0
