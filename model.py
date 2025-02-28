@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 
 class MNISTClassifier(nn.Module):
-    def __init__(self, input_size, hidden_size, num_classes, k=6, gamma=8):
+    def __init__(self, input_size, hidden_size, num_classes, k=5):
         super(MNISTClassifier, self).__init__()
         # architecture
         self.input_size = input_size
@@ -14,7 +14,6 @@ class MNISTClassifier(nn.Module):
 
         # fault injection
         self.k = k
-        self.gamma = gamma
         self.mean_grad = {}
         self.var_grad = {}
         self.num_updates = {}
@@ -104,12 +103,17 @@ class MNISTClassifier(nn.Module):
         upper_bound = mean_grad_tensor + self.k * std_grad_tensor
 
         layer_unsqeueezed = layer.unsqueeze(1)
-        kernel = torch.tensor([-1.0, 1.0, 0.0]).view(1, 1, 3)
-        grad_Y = F.conv1d(layer_unsqeueezed, kernel.to(layer.device), padding=1).squeeze(1)
+        left_kernel = torch.tensor([-1.0, 1.0, 0.0]).view(1, 1, 3)
+        right_kernel = torch.tensor([0.0, 1.0, -1.0]).view(1, 1, 3)
+        left_grad = F.conv1d(layer_unsqeueezed, left_kernel.to(layer.device), padding=1).squeeze(1)
+        right_grad = F.conv1d(layer_unsqeueezed, right_kernel.to(layer.device), padding=1).squeeze(1)
 
-        mask = (grad_Y < lower_bound) | (grad_Y > upper_bound)
+        mask1 = ((left_grad < lower_bound) | (left_grad > upper_bound))
+        mask2 = ((right_grad < lower_bound) | (right_grad > upper_bound))
+        mask = mask1 & mask2
         new_layer = layer.clone()
-        for i in range(1, layer.size(0)):
-            new_layer[i, mask[i]] = mean_grad_tensor[mask[i]] + layer[i, mask[i]]
+        new_layer[mask] = 0
+        # print("old layer:", layer[0, mask[0]])
+        # print("new layer:", new_layer[0, mask[0]])
 
         return new_layer

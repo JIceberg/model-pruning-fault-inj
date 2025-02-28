@@ -104,7 +104,7 @@ else:
 
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}")
 
-    fine_tune_iterations = 10
+    fine_tune_iterations = 0
 
     masks = {}
 
@@ -132,9 +132,10 @@ else:
 
 count_zero_nonzero_weights(model)
 
-def plot_accuracy(model, tests, suppress_errors=False):
+def plot_accuracy_no_correction_vs_correction(model, tests):
     error_rates = [0, 0.00001, 0.0001, 0.001, 0.01, 0.1, 1]
-    accuracies = []
+    unsupressed_accuracies = []
+    suppressed_accuracies = []
 
     model.eval()
     for error_rate in error_rates:
@@ -143,19 +144,34 @@ def plot_accuracy(model, tests, suppress_errors=False):
         with torch.no_grad():
             for images, labels in tests:
                 images, labels = images.to(device), labels.to(device)
-                outputs = model(images, inject_faults=True, suppress_errors=suppress_errors, error_rate=error_rate)
+                outputs = model(images, inject_faults=True, suppress_errors=False, error_rate=error_rate)
                 _, predicted = torch.max(outputs, 1)
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
         accuracy = correct / total
-        print(f"Test Accuracy with Error Rate {error_rate:.3f}: {100. * accuracy:.2f}%")
-        accuracies.append(accuracy)
+        print(f"Test Accuracy with Error Rate {error_rate}: {100. * accuracy:.2f}%")
+        unsupressed_accuracies.append(accuracy)
+
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for images, labels in tests:
+                images, labels = images.to(device), labels.to(device)
+                outputs = model(images, inject_faults=True, suppress_errors=True, error_rate=error_rate)
+                _, predicted = torch.max(outputs, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+        accuracy = correct / total
+        print(f"Test Accuracy with Error Rate {error_rate}: {100. * accuracy:.2f}%")
+        suppressed_accuracies.append(accuracy)
         
     plt.figure(figsize=(7, 5))
-    plt.plot(error_rates, accuracies, marker='o', linestyle='-', color='black')
+    plt.plot(error_rates, unsupressed_accuracies, marker='o', linestyle='-', color='red', label='unsuppressed')
+    plt.plot(error_rates, suppressed_accuracies, marker='o', linestyle='--', color='blue', label='suppressed')
     plt.xscale('log')
     plt.xlabel("Error Rate")
     plt.ylabel("Accuracy")
+    plt.legend()
     plt.title("Model Accuracy vs. Error Rate")
     plt.show()
 
@@ -189,8 +205,6 @@ with torch.no_grad():
 accuracy = 100 * correct / total
 print(f"Test Accuracy with Error Rate 0.1: {accuracy:.2f}%")
 
-# plot_accuracy(model, test_loader)
-
 correct = 0
 total = 0
 with torch.no_grad():
@@ -209,4 +223,4 @@ with torch.no_grad():
 accuracy = 100 * correct / total
 print(f"Test Accuracy with Error Correction: {accuracy:.2f}%")
 
-# plot_accuracy(model, test_loader, suppress_errors=True)
+plot_accuracy_no_correction_vs_correction(model, test_loader)
