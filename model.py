@@ -17,6 +17,8 @@ class MNISTClassifier(nn.Module):
         self.mean_grad = {}
         self.var_grad = {}
         self.num_updates = {}
+        self.mean_output = {}
+        self.cov_output = {}
 
     def forward(self, x, compute_grad=False, inject_faults=False, suppress_errors=False, error_rate=0.1):
         x = x.view(-1, self.input_size)  # Flatten the image
@@ -74,25 +76,50 @@ class MNISTClassifier(nn.Module):
         return modified_output
 
     def update_running_statistics(self, layer, layer_name):
+        if layer_name not in self.num_updates:
+            self.num_updates[layer_name] = 0
+        self.num_updates[layer_name] += 1
+
+        # squeeze layer output into average over the batch size
+        batch_size, num_neurons = layer.shape
+        layer_output = layer.mean(dim=0).cpu().detach()
+
+        if layer_name not in self.mean_output:
+            self.mean_output[layer_name] = torch.zeros(num_neurons, device=layer.device)
+            self.cov_output[layer_name] = torch.zeros((num_neurons, num_neurons), device=layer.device)
+        delta = layer_output - self.mean_output[layer_name]
+        self.mean_output[layer_name] += delta / self.num_updates[layer_name]
+        self.cov_output[layer_name] += torch.outer(delta, layer_output - self.mean_output[layer_name])
+
         layer_unsqeueezed = layer.unsqueeze(1)
         kernel = torch.tensor([-1.0, 1.0, 0.0]).view(1, 1, 3)
         grad_Y = F.conv1d(layer_unsqeueezed, kernel.to(layer.device), padding=1).squeeze(1)
-
+        
         mean = grad_Y.mean(dim=0).cpu().detach().numpy()
         var = grad_Y.var(dim=0).cpu().detach().numpy()
-
         if layer_name not in self.mean_grad:
             self.mean_grad[layer_name] = mean
             self.var_grad[layer_name] = var
-            self.num_updates[layer_name] = 0
         else:
-            self.num_updates[layer_name] += 1
             self.mean_grad[layer_name] += (mean - self.mean_grad[layer_name]) / self.num_updates[layer_name]
             self.var_grad[layer_name] += (var - self.var_grad[layer_name]) / self.num_updates[layer_name]
+        
+
+    def __compute_correlation(self, layer_name):
+        cov_matrix = self.cov_output[layer_name] / (self.num_updates[layer_name] - 1)
+        std_dev = torch.sqrt(torch.diag(cov_matrix))
+
+        std_matrix = std_dev[:, None] * std_dev[None, :]
+        correlation = cov_matrix / std_matrix
+        correlation[torch.isnan(correlation)] = 0
+
+        return correlation
     
     def threshold_gradients(self, layer, layer_name):
         if self.mean_grad[layer_name] is None or self.var_grad[layer_name] is None:
             return layer
+        
+        batch_size, num_neurons = layer.shape
         
         std_grad = np.sqrt(self.var_grad[layer_name])
 
@@ -111,8 +138,32 @@ class MNISTClassifier(nn.Module):
         mask1 = ((left_grad < lower_bound) | (left_grad > upper_bound))
         mask2 = ((right_grad < lower_bound) | (right_grad > upper_bound))
         mask = mask1 & mask2
-        new_layer = layer.clone()
-        new_layer[mask] = 0
+
+        # get correlation
+        correlation = self.__compute_correlation(layer_name)
+        correlation_threshold = 0.5 # tuned parameter
+        row_indices, col_indices = torch.where(correlation > correlation_threshold)
+
+        # remove the neuron from its own correlation group
+        corr_mask = row_indices != col_indices
+        row_indices = row_indices[corr_mask]
+        col_indices = col_indices[corr_mask]
+
+        # for neurons that have a non-empty list of correlated neurons,
+        # we compute the mean across them instead of zeroing
+        # otherwise, we still zero
+        means = torch.zeros(num_neurons, dtype=correlation.dtype)
+        if col_indices.numel() > 0:
+            sum_per_col = torch.zeros(num_neurons, dtype=correlation.dtype)
+            count_per_col = torch.zeros(num_neurons, dtype=correlation.dtype)
+
+            sum_per_col.scatter_add_(0, col_indices, correlation[row_indices, col_indices])
+            count_per_col.scatter_add_(0, col_indices, torch.ones_like(col_indices, dtype=correlation.dtype))
+
+            nonzero_mask = count_per_col > 0
+            means[nonzero_mask] = sum_per_col[nonzero_mask]
+
+        new_layer = torch.where(mask, means.expand(batch_size, -1), layer)
         # print("old layer:", layer[0, mask[0]])
         # print("new layer:", new_layer[0, mask[0]])
 
