@@ -18,9 +18,9 @@ class MNISTClassifier(nn.Module):
         self.var_grad = {}
         self.num_updates = {}
 
-    def forward(self, x, compute_grad=False, inject_faults=False, suppress_errors=False, error_rate=0.1):
-        x = x.view(-1, self.input_size)  # Flatten the image
-        fc1_output = self.fc1(x)
+    def forward(self, x, compute_grad=False, inject_faults=False, suppress_errors=False, error_rate=0.1, zeroing=False):
+        fc1_input = x.view(-1, self.input_size)  # Flatten the image
+        fc1_output = self.fc1(fc1_input)
         if not self.training:
             if compute_grad:
                 self.update_running_statistics(fc1_output, "fc1")
@@ -30,11 +30,12 @@ class MNISTClassifier(nn.Module):
                     if suppress_errors:
                         if "fc1" in self.mean_grad:
                             fc1_output = self.threshold_gradients(
-                                x,
+                                fc1_input,
                                 fc1_output,
-                                self.fc1.weight,
+                                self.fc1,
                                 "fc1",
-                                error_rate=error_rate)
+                                error_rate=error_rate,
+                                zeroing=zeroing)
         fc2_input = self.relu(fc1_output)
         fc2_output = self.fc2(fc2_input)
         if not self.training:
@@ -48,9 +49,10 @@ class MNISTClassifier(nn.Module):
                             fc2_output = self.threshold_gradients(
                                 fc2_input,
                                 fc2_output,
-                                self.fc2.weight,
+                                self.fc2,
                                 "fc2",
-                                error_rate=error_rate)
+                                error_rate=error_rate,
+                                zeroing=zeroing)
         return fc2_output
     
     def bit_flip_fault_inj(self, output, error_rate=0.1):
@@ -101,7 +103,7 @@ class MNISTClassifier(nn.Module):
             self.mean_grad[layer_name] += (mean - self.mean_grad[layer_name]) / self.num_updates[layer_name]
             self.var_grad[layer_name] += (var - self.var_grad[layer_name]) / self.num_updates[layer_name]
     
-    def threshold_gradients(self, input, output, weight, layer_name, error_rate=0.1):
+    def threshold_gradients(self, input, output, layer_func, layer_name, error_rate=0.1, zeroing=False):
         if self.mean_grad[layer_name] is None or self.var_grad[layer_name] is None:
             return output
         
@@ -124,13 +126,20 @@ class MNISTClassifier(nn.Module):
         mask1 = ((left_grad < lower_bound) | (left_grad > upper_bound))
         mask2 = ((right_grad < lower_bound) | (right_grad > upper_bound))
         mask = mask1 & mask2
- 
-        new_output = output.clone()
 
-        # assign recomputed output to the erroneous neurons
-        new_output[mask] = 0
+        new_output = output.clone()
+        if zeroing:
+            new_output[mask] = 0
+        else:
+            left_values = torch.roll(output, 1, 1)
+            left_values[:, 0] = 0
+            recomputed_values = left_values + mean_grad_tensor
+            new_output[mask] = recomputed_values[mask]
+
+        ground_truth = layer_func(input)
 
         # print("old layer:", output[0, mask[0]])
         # print("new layer:", new_output[0, mask[0]])
+        # print("true layer:", ground_truth[0, mask[0]])
 
         return new_output

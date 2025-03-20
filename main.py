@@ -132,10 +132,11 @@ else:
 
 count_zero_nonzero_weights(model)
 
-def plot_accuracy_no_correction_vs_correction(model, tests):
+def plot_accuracy_no_correction_vs_correction(model, tests, zeroing=False):
     error_rates = [0, 0.00001, 0.0001, 0.001, 0.01, 0.1, 1]
     unsupressed_accuracies = []
     suppressed_accuracies = []
+    zeroed_accuracies = []
 
     model.eval()
     for error_rate in error_rates:
@@ -162,12 +163,27 @@ def plot_accuracy_no_correction_vs_correction(model, tests):
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
         accuracy = correct / total
-        print(f"Test Accuracy with Error Rate {error_rate}: {100. * accuracy:.2f}%")
+        print(f"Test Accuracy with Error Rate (corrected) {error_rate}: {100. * accuracy:.2f}%")
         suppressed_accuracies.append(accuracy)
+
+        if zeroing:
+            correct = 0
+            total = 0
+            with torch.no_grad():
+                for images, labels in tests:
+                    images, labels = images.to(device), labels.to(device)
+                    outputs = model(images, inject_faults=True, suppress_errors=True, error_rate=error_rate, zeroing=True)
+                    _, predicted = torch.max(outputs, 1)
+                    total += labels.size(0)
+                    correct += (predicted == labels).sum().item()
+            accuracy = correct / total
+            zeroed_accuracies.append(accuracy)
         
     plt.figure(figsize=(7, 5))
     plt.plot(error_rates, unsupressed_accuracies, marker='o', linestyle='-', color='red', label='unsuppressed')
-    plt.plot(error_rates, suppressed_accuracies, marker='o', linestyle='--', color='blue', label='suppressed')
+    plt.plot(error_rates, suppressed_accuracies, marker='o', linestyle='--', color='blue', label='suppressed (new)')
+    if zeroing:
+        plt.plot(error_rates, zeroed_accuracies, marker='o', linestyle='--', color='green', label='suppressed (zeroing)')
     plt.xscale('log')
     plt.xlabel("Error Rate")
     plt.ylabel("Accuracy")
@@ -209,9 +225,11 @@ correct = 0
 total = 0
 with torch.no_grad():
     # compute gradient statistics
+    print("computing gradients...")
     for images, labels in train_loader:
         images, labels = images.to(device), labels.to(device)
         outputs = model(images, compute_grad=True)
+    print("finished computing")
 
     for images, labels in test_loader:
         images, labels = images.to(device), labels.to(device)
@@ -223,4 +241,4 @@ with torch.no_grad():
 accuracy = 100 * correct / total
 print(f"Test Accuracy with Error Correction: {accuracy:.2f}%")
 
-plot_accuracy_no_correction_vs_correction(model, test_loader)
+plot_accuracy_no_correction_vs_correction(model, test_loader, zeroing=True)
