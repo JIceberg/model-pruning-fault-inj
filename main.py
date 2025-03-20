@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 
 import os
 
-from model import MNISTClassifier
+from model import MNISTClassifier, CNNClassifier
 
 # set numpy to seed for consistent results
 np.random.seed(42)
@@ -82,14 +82,14 @@ def get_weight_distribution(model):
     plt.title('Weight Distribution of Model')
     plt.show()
 
-model = MNISTClassifier(input_size, hidden_size, num_classes).to(device)
+model = CNNClassifier(input_size, hidden_size, num_classes).to(device)
 print(model)
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
-if os.path.exists("saved_model.pth"):
-    model.load_state_dict(torch.load("saved_model.pth", weights_only=True))
+if os.path.exists("saved_cnn_model.pth"):
+    model.load_state_dict(torch.load("saved_cnn_model.pth", weights_only=True))
 else:
     for epoch in range(num_epochs):
         for images, labels in train_loader:
@@ -103,6 +103,9 @@ else:
             optimizer.step()
 
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}")
+
+    if not os.path.exists("unpruned_cnn_model.pth"):    
+        torch.save(model.state_dict(), "unpruned_cnn_model.pth")
     
     correct = 0
     total = 0
@@ -150,13 +153,13 @@ else:
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
         accuracy = correct / total
-        print(f"Test Accuracy after {i}-th Prune: {100. * accuracy:.2f}%")
+        print(f"Test Accuracy after Prune #{i+1}: {100. * accuracy:.2f}%")
 
-    torch.save(model.state_dict(), "saved_model.pth")
+    torch.save(model.state_dict(), "saved_cnn_model.pth")
 
 count_zero_nonzero_weights(model)
 
-def plot_accuracy_no_correction_vs_correction(model, tests, zeroing=False):
+def plot_accuracy_no_correction_vs_correction(model, tests, zeroing=False, compare=False):
     error_rates = [0, 0.00001, 0.0001, 0.001, 0.01, 0.1, 1]
     unsupressed_accuracies = []
     suppressed_accuracies = []
@@ -205,14 +208,15 @@ def plot_accuracy_no_correction_vs_correction(model, tests, zeroing=False):
         
     plt.figure(figsize=(7, 5))
     plt.plot(error_rates, unsupressed_accuracies, marker='o', linestyle='-', color='red', label='unsuppressed')
-    plt.plot(error_rates, suppressed_accuracies, marker='o', linestyle='--', color='blue', label='suppressed (new)')
+    if not compare and not zeroing or compare and zeroing:
+        plt.plot(error_rates, suppressed_accuracies, marker='o', linestyle='--', color='blue', label='suppressed (new)')
     if zeroing:
         plt.plot(error_rates, zeroed_accuracies, marker='o', linestyle='--', color='green', label='suppressed (zeroing)')
     plt.xscale('log')
     plt.xlabel("Error Rate")
     plt.ylabel("Accuracy")
     plt.legend()
-    plt.title("Model Accuracy vs. Error Rate")
+    plt.title("Pruned Model Accuracy vs. Error Rate")
     plt.show()
 
 model.eval()
@@ -265,4 +269,4 @@ with torch.no_grad():
 accuracy = 100 * correct / total
 print(f"Test Accuracy with Error Correction: {accuracy:.2f}%")
 
-plot_accuracy_no_correction_vs_correction(model, test_loader, zeroing=True)
+plot_accuracy_no_correction_vs_correction(model, test_loader, zeroing=True, compare=False)
