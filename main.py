@@ -21,7 +21,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Hyperparameters
 input_size = 28 * 28  # Flattened image size
-hidden_size = 128
+hidden_size = 256
 num_classes = 10  # Digits 0-9
 num_epochs = 5
 batch_size = 64
@@ -103,13 +103,25 @@ else:
             optimizer.step()
 
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}")
+    
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for images, labels in test_loader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            _, predicted = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+    accuracy = correct / total
+    print(f"Initial Test Accuracy: {100. * accuracy:.2f}%")
 
-    fine_tune_iterations = 0
+    fine_tune_iterations = 5
 
     masks = {}
 
-    for _ in range(fine_tune_iterations):
-        prune_weights(model, masks, prune_threshold=0.75)
+    for i in range(fine_tune_iterations):
+        prune_weights(model, masks, prune_threshold=0.5)
 
         count_zero_nonzero_weights(model)
 
@@ -127,6 +139,18 @@ else:
                 enforce_pruning(model, masks)
 
             print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}")
+
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for images, labels in test_loader:
+                images, labels = images.to(device), labels.to(device)
+                outputs = model(images)
+                _, predicted = torch.max(outputs, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+        accuracy = correct / total
+        print(f"Test Accuracy after {i}-th Prune: {100. * accuracy:.2f}%")
 
     torch.save(model.state_dict(), "saved_model.pth")
 
