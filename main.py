@@ -6,12 +6,10 @@ import torchvision
 import numpy as np
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
-
 import matplotlib.pyplot as plt
-
 import os
 
-from model import MNISTClassifier, CNNClassifier
+from model import MNISTClassifier
 
 # set numpy to seed for consistent results
 np.random.seed(42)
@@ -82,14 +80,14 @@ def get_weight_distribution(model):
     plt.title('Weight Distribution of Model')
     plt.show()
 
-model = CNNClassifier(input_size, hidden_size, num_classes).to(device)
+model = MNISTClassifier(input_size, hidden_size, num_classes).to(device)
 print(model)
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
-if os.path.exists("saved_cnn_model.pth"):
-    model.load_state_dict(torch.load("saved_cnn_model.pth", weights_only=True))
+if os.path.exists("pruned_mlp_model.pth"):
+    model.load_state_dict(torch.load("pruned_mlp_model.pth", weights_only=True))
 else:
     for epoch in range(num_epochs):
         for images, labels in train_loader:
@@ -104,8 +102,8 @@ else:
 
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}")
 
-    if not os.path.exists("unpruned_cnn_model.pth"):    
-        torch.save(model.state_dict(), "unpruned_cnn_model.pth")
+    if not os.path.exists("unpruned_mlp_model.pth"):    
+        torch.save(model.state_dict(), "unpruned_mlp_model.pth")
     
     correct = 0
     total = 0
@@ -119,7 +117,7 @@ else:
     accuracy = correct / total
     print(f"Initial Test Accuracy: {100. * accuracy:.2f}%")
 
-    fine_tune_iterations = 5
+    fine_tune_iterations = 4
 
     masks = {}
 
@@ -155,15 +153,14 @@ else:
         accuracy = correct / total
         print(f"Test Accuracy after Prune #{i+1}: {100. * accuracy:.2f}%")
 
-    torch.save(model.state_dict(), "saved_cnn_model.pth")
+    torch.save(model.state_dict(), "pruned_mlp_model.pth")
 
 count_zero_nonzero_weights(model)
 
-def plot_accuracy_no_correction_vs_correction(model, tests, zeroing=False, compare=False):
+def plot_accuracy_no_correction_vs_correction(model, tests):
     error_rates = [0, 0.00001, 0.0001, 0.001, 0.01, 0.1, 1]
     unsupressed_accuracies = []
     suppressed_accuracies = []
-    zeroed_accuracies = []
 
     model.eval()
     for error_rate in error_rates:
@@ -192,31 +189,15 @@ def plot_accuracy_no_correction_vs_correction(model, tests, zeroing=False, compa
         accuracy = correct / total
         print(f"Test Accuracy with Error Rate (corrected) {error_rate}: {100. * accuracy:.2f}%")
         suppressed_accuracies.append(accuracy)
-
-        if zeroing:
-            correct = 0
-            total = 0
-            with torch.no_grad():
-                for images, labels in tests:
-                    images, labels = images.to(device), labels.to(device)
-                    outputs = model(images, inject_faults=True, suppress_errors=True, error_rate=error_rate, zeroing=True)
-                    _, predicted = torch.max(outputs, 1)
-                    total += labels.size(0)
-                    correct += (predicted == labels).sum().item()
-            accuracy = correct / total
-            zeroed_accuracies.append(accuracy)
         
     plt.figure(figsize=(7, 5))
-    plt.plot(error_rates, unsupressed_accuracies, marker='o', linestyle='-', color='red', label='unsuppressed')
-    if not compare and not zeroing or compare and zeroing:
-        plt.plot(error_rates, suppressed_accuracies, marker='o', linestyle='--', color='blue', label='suppressed (new)')
-    if zeroing:
-        plt.plot(error_rates, zeroed_accuracies, marker='o', linestyle='--', color='green', label='suppressed (zeroing)')
+    plt.plot(error_rates, unsupressed_accuracies, marker='o', linestyle='-', color='black', label='uncorrected')
+    plt.plot(error_rates, suppressed_accuracies, marker='o', linestyle='--', color='blue', label='corrected')
     plt.xscale('log')
     plt.xlabel("Error Rate")
     plt.ylabel("Accuracy")
     plt.legend()
-    plt.title("Pruned Model Accuracy vs. Error Rate")
+    plt.title("Model Accuracy vs. Error Rate")
     plt.show()
 
 model.eval()
@@ -241,7 +222,7 @@ with torch.no_grad():
     # faulty run, no correction
     for images, labels in test_loader:
         images, labels = images.to(device), labels.to(device)
-        outputs = model(images, inject_faults=True)
+        outputs = model(images, inject_faults=True, error_rate=0.1)
         _, predicted = torch.max(outputs, 1)
         total += labels.size(0)
         correct += (predicted == labels).sum().item()
@@ -261,7 +242,7 @@ with torch.no_grad():
 
     for images, labels in test_loader:
         images, labels = images.to(device), labels.to(device)
-        outputs = model(images, inject_faults=True, suppress_errors=True)
+        outputs = model(images, inject_faults=True, suppress_errors=True, error_rate=0.1)
         _, predicted = torch.max(outputs, 1)
         total += labels.size(0)
         correct += (predicted == labels).sum().item()
@@ -269,4 +250,4 @@ with torch.no_grad():
 accuracy = 100 * correct / total
 print(f"Test Accuracy with Error Correction: {accuracy:.2f}%")
 
-plot_accuracy_no_correction_vs_correction(model, test_loader, zeroing=True, compare=False)
+plot_accuracy_no_correction_vs_correction(model, test_loader)
