@@ -43,7 +43,7 @@ class Correction_Module_dense(nn.Module):
         grad_Y = self.get_gradient(x)
         mean = grad_Y.mean(dim=0).cpu().detach().numpy()
         var = grad_Y.var(dim=0).cpu().detach().numpy()
-        
+
         if layer_name not in self.mean_grad:
             self.mean_grad[layer_name] = mean
             self.var_grad[layer_name] = var
@@ -96,8 +96,15 @@ class Correction_Module_conv(nn.Module):
         convolution_nn.bias[0] = torch.tensor([0],dtype=torch.float)
         convolution_nn = convolution_nn.to(x.device)
 
+        grads = []
         for batchind in range(0, x.shape[0]):
-            outtemp = torch.swapaxes(x[batchind])
+            outtemp = torch.swapaxes(x[batchind,:,:,:], 0, 2)
+            tempout_test = convolution_nn(outtemp)
+            grad = torch.swapaxes(tempout_test, 0, 2)
+            grads.append(grad)
+        
+        grads = torch.stack(grads, dim=0)
+        return grads
     
     def compute_grad(self, x, layer_name):
         if layer_name not in self.num_updates:
@@ -121,7 +128,6 @@ class Correction_Module_conv(nn.Module):
         if self.mean_grad[layer_name] is None or self.var_grad[layer_name] is None:
             return output
 
-        batch_size, num_neurons = output.shape
         output = nan_checker(output)
         
         std_grad = np.sqrt(self.var_grad[layer_name])
@@ -146,25 +152,60 @@ class Correction_Module_conv(nn.Module):
         return new_output
 
 class MNISTClassifier(nn.Module):
-    def __init__(self, input_size, hidden_size, num_classes):
+    def __init__(self, hidden_size):
         super(MNISTClassifier, self).__init__()
         # architecture
-        self.input_size = input_size
-        self.fc1 = nn.Linear(input_size, hidden_size, bias=False)
-        self.fc2 = nn.Linear(hidden_size, num_classes, bias=False)
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=8, stride=1, bias=False)
+        self.conv2 = nn.Conv2d(64, 128, kernel_size=6, stride=2, bias=False)
+        self.conv3 = nn.Conv2d(128, 128, kernel_size=5, stride=1, bias=False)
+        self.fc1 = nn.Linear(128 * 4 * 4, hidden_size, bias=False)
+        self.fc2 = nn.Linear(hidden_size, 10, bias=False)
         self.relu = nn.ReLU()
+        
         self.corr_dense = Correction_Module_dense()
+        self.corr_conv = Correction_Module_conv()
 
     def forward(self, x, inject_faults=False, compute_grad=False, suppress_errors=False, error_rate=0.0):
-        fc1_input = x.view(-1, self.input_size)  # Flatten the image
+        conv1_output = self.conv1(x)
+        if inject_faults:
+            conv1_output = self.bit_flip_fault_inj(conv1_output, error_rate=error_rate)
+        conv1_output = self.relu(conv1_output)
+        if compute_grad:
+            self.corr_conv.compute_grad(conv1_output, "conv1")
+        if suppress_errors:
+            conv1_output = self.corr_conv(x, conv1_output, self.conv1, "conv1")
+        
+        conv2_input = conv1_output
+        conv2_output = self.conv2(conv2_input)
+        if inject_faults:
+            conv2_output = self.bit_flip_fault_inj(conv2_output, error_rate=error_rate)
+        conv2_output = self.relu(conv2_output)
+        if compute_grad:
+            self.corr_conv.compute_grad(conv2_output, "conv2")
+        if suppress_errors:
+            conv2_output = self.corr_conv(conv2_input, conv2_output, self.conv2, "conv2")
+        
+        conv3_input = conv2_output
+        conv3_output = self.conv3(conv3_input)
+        if inject_faults:
+            conv3_output = self.bit_flip_fault_inj(conv3_output, error_rate=error_rate)
+        conv3_output = self.relu(conv3_output)
+        if compute_grad:
+            self.corr_conv.compute_grad(conv3_output, "conv3")
+        if suppress_errors:
+            conv3_output = self.corr_conv(conv3_input, conv3_output, self.conv3, "conv3")
+        
+        fc1_input = conv3_output.view(-1, 128 * 4 * 4)
         fc1_output = self.fc1(fc1_input)
         if inject_faults:
             fc1_output = self.bit_flip_fault_inj(fc1_output, error_rate=error_rate)
+        fc1_output = self.relu(fc1_output)
         if compute_grad:
             self.corr_dense.compute_grad(fc1_output, "fc1")
         if suppress_errors:
             fc1_output = self.corr_dense(fc1_input, fc1_output, self.fc1, "fc1")
-        fc2_input = self.relu(fc1_output)
+        
+        fc2_input = fc1_output
         fc2_output = self.fc2(fc2_input)
         if inject_faults:
             fc2_output = self.bit_flip_fault_inj(fc2_output, error_rate=error_rate)
@@ -172,6 +213,7 @@ class MNISTClassifier(nn.Module):
             self.corr_dense.compute_grad(fc2_output, "fc2")
         if suppress_errors:
             fc2_output = self.corr_dense(fc2_input, fc2_output, self.fc2, "fc2")
+        
         return fc2_output
     
     def bit_flip_fault_inj(self, output, error_rate):

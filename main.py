@@ -80,14 +80,14 @@ def get_weight_distribution(model):
     plt.title('Weight Distribution of Model')
     plt.show()
 
-model = MNISTClassifier(input_size, hidden_size, num_classes).to(device)
+model = MNISTClassifier(hidden_size).to(device)
 print(model)
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
-if os.path.exists("pruned_mlp_model.pth"):
-    model.load_state_dict(torch.load("pruned_mlp_model.pth", weights_only=True))
+if os.path.exists("unpruned_cnn_model.pth"):
+    model.load_state_dict(torch.load("unpruned_cnn_model.pth", weights_only=True))
 else:
     for epoch in range(num_epochs):
         for images, labels in train_loader:
@@ -102,8 +102,8 @@ else:
 
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}")
 
-    if not os.path.exists("unpruned_mlp_model.pth"):    
-        torch.save(model.state_dict(), "unpruned_mlp_model.pth")
+    if not os.path.exists("unpruned_cnn_model.pth"):    
+        torch.save(model.state_dict(), "unpruned_cnn_model.pth")
     
     correct = 0
     total = 0
@@ -117,7 +117,7 @@ else:
     accuracy = correct / total
     print(f"Initial Test Accuracy: {100. * accuracy:.2f}%")
 
-    fine_tune_iterations = 4
+    fine_tune_iterations = 5
 
     masks = {}
 
@@ -153,7 +153,7 @@ else:
         accuracy = correct / total
         print(f"Test Accuracy after Prune #{i+1}: {100. * accuracy:.2f}%")
 
-    torch.save(model.state_dict(), "pruned_mlp_model.pth")
+    torch.save(model.state_dict(), "pruned_cnn_model.pth")
 
 count_zero_nonzero_weights(model)
 
