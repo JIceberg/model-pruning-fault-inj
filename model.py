@@ -225,6 +225,7 @@ class Correction_Module_dense_checksum(nn.Module):
         AC = self.block_checksum_matrix_left(A)         # (ceil(m/k), n)
         BC = self.block_checksum_matrix_left(B)         # (ceil(p/k), n)
         CC_check = F.linear(BC, AC)
+        CC_check = flip_bits(CC_check, error_rate=error_rate)
 
         # Actual checksum of the faulty matrix
         CC_actual = self.block_checksum_2d(C_faulty)    # shape: (h, w)

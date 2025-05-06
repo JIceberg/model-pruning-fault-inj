@@ -131,6 +131,7 @@ k = 4
 AC = block_checksum_matrix_left(A, k)
 BC = block_checksum_matrix_left(B, k)
 CC_check = F.linear(BC, AC)
+flip_bits(CC_check)
 print(CC_check.shape)
 
 CC = block_checksum_matrix_right(block_checksum_matrix_left(C, k), k)

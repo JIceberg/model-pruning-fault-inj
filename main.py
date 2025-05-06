@@ -86,8 +86,8 @@ print(model)
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
-if os.path.exists("unpruned_model.pth"):
-    model.load_state_dict(torch.load("unpruned_model.pth", weights_only=True))
+if os.path.exists("pruned_model.pth"):
+    model.load_state_dict(torch.load("pruned_model.pth", weights_only=True))
 else:
     for epoch in range(num_epochs):
         for images, labels in train_loader:
@@ -197,7 +197,7 @@ def plot_accuracy_no_correction_vs_correction(model, tests):
     plt.xlabel("Error Rate")
     plt.ylabel("Accuracy")
     plt.legend()
-    plt.title("Unpruned Model Accuracy vs. Error Rate")
+    plt.title("Pruned Model Accuracy vs. Error Rate")
     plt.show()
 
 model.eval()
