@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import math
 
 def nan_checker(x):
     nan_check = torch.isnan(x)
@@ -10,6 +11,30 @@ def nan_checker(x):
         x = x.masked_fill_(nan_check,0)
         x = x.masked_fill_(inf_check,0)
     return x  
+
+def flip_bits(A, error_rate=1e-4):
+    # Flatten tensor for easier manipulation
+    flat_output = A.view(-1)
+
+    # Convert float tensor to int representation (IEEE 754)
+    float_bits = flat_output.to(torch.float32).cpu().numpy().view(np.uint32)
+
+    # Randomly select bits to flip
+    num_elements = flat_output.numel()
+    random_bits = np.random.randint(0, 32, size=num_elements, dtype=np.uint32)
+
+    # Create a mask to determine which values to flip
+    flip_mask = np.random.rand(num_elements) < error_rate
+
+    # Perform bitwise XOR only for selected neurons
+    flipped_bits = float_bits ^ (1 << random_bits)
+
+    # Replace only values where flip_mask is True
+    float_bits[flip_mask] = flipped_bits[flip_mask]
+
+    # Convert back to PyTorch tensor
+    modified_output = torch.tensor(float_bits.view(np.float32), dtype=torch.float32, device=A.device).view(A.shape)
+    return modified_output
 
 class Correction_Module_dense(nn.Module):
     def __init__(self):
@@ -150,93 +175,112 @@ class Correction_Module_conv(nn.Module):
         # print("true layer:", ground_truth[0, mask[0]])
 
         return new_output
+    
+class Correction_Module_dense_checksum(nn.Module):
+    def __init__(self, k=2, atol=1e-3):
+        super(Correction_Module_dense_checksum, self).__init__()
+        self.k = k
+        self.atol = atol
+    
+    def block_checksum_matrix_left(self, A):
+        m, n = A.shape
+        w = math.ceil(m / self.k)
+        pad_rows = w * self.k - m
+
+        if pad_rows > 0:
+            pad = A.new_zeros((pad_rows, n))
+            A_padded = torch.cat([A, pad], dim=0)
+        else:
+            A_padded = A
+
+        AC = A_padded.view(w, self.k, n).sum(dim=1)
+        return AC
+
+    def block_checksum_matrix_right(self, B):
+        m, n = B.shape
+        w = math.ceil(n / self.k)
+        pad_cols = w * self.k - n
+
+        if pad_cols > 0:
+            pad = B.new_zeros((m, pad_cols))
+            B_padded = torch.cat([B, pad], dim=1)
+        else:
+            B_padded = B
+
+        BC = B_padded.view(m, w, self.k).sum(dim=2)
+        return BC
+    
+    def block_checksum_2d(self, C):
+        left = self.block_checksum_matrix_left(C)
+        return self.block_checksum_matrix_right(left)
+    
+    def forward(self, A, B, C_faulty, error_rate=0.0):
+        """
+        Detects and recomputes erroneous blocks in C using 2D block checksums.
+        """
+        m, n = C_faulty.shape
+        k = self.k
+
+        # Compute 2D block checksums for B and A
+        AC = self.block_checksum_matrix_left(A)         # (ceil(m/k), n)
+        BC = self.block_checksum_matrix_left(B)         # (ceil(p/k), n)
+        CC_check = F.linear(BC, AC)
+
+        # Actual checksum of the faulty matrix
+        CC_actual = self.block_checksum_2d(C_faulty)    # shape: (h, w)
+
+        # Identify mismatches
+        diff = ~torch.isclose(CC_actual, CC_check, rtol=1e-4, atol=self.atol)
+        error_blocks = torch.nonzero(diff, as_tuple=False)
+
+        for bi, bj in error_blocks:
+            row_start = bi * k
+            row_end = min((bi + 1) * k, m)
+            col_start = bj * k
+            col_end = min((bj + 1) * k, n)
+
+            # Select submatrices
+            B_block = B[row_start:row_end, :]         # shape (k, n)
+            A_block = A[col_start:col_end, :]         # shape (k, n)
+
+            # Recompute block of C
+            C_block = F.linear(B_block, A_block)      # shape: (k, k)
+            C_block = flip_bits(C_block, error_rate=error_rate)
+            C_faulty[row_start:row_end, col_start:col_end] = C_block
+
+        return C_faulty
 
 class MNISTClassifier(nn.Module):
-    def __init__(self, hidden_size):
+    def __init__(self, input_size, output_size, hidden_size=128):
         super(MNISTClassifier, self).__init__()
+        self.input_size = input_size
+
         # architecture
-        self.conv1 = nn.Conv2d(1, 64, kernel_size=8, stride=1, bias=False)
-        self.conv2 = nn.Conv2d(64, 128, kernel_size=6, stride=2, bias=False)
-        self.conv3 = nn.Conv2d(128, 128, kernel_size=5, stride=1, bias=False)
-        self.fc1 = nn.Linear(128 * 4 * 4, hidden_size, bias=False)
-        self.fc2 = nn.Linear(hidden_size, 10, bias=False)
+        self.fc1 = nn.Linear(input_size, hidden_size, bias=False)
+        self.fc2 = nn.Linear(hidden_size, output_size, bias=False)
         self.relu = nn.ReLU()
         
-        self.corr_dense = Correction_Module_dense()
-        self.corr_conv = Correction_Module_conv()
+        self.corr_dense = Correction_Module_dense_checksum(k=4, atol=1e-4)
 
-    def forward(self, x, inject_faults=False, compute_grad=False, suppress_errors=False, error_rate=0.0):
-        conv1_output = self.conv1(x)
-        if inject_faults:
-            conv1_output = self.bit_flip_fault_inj(conv1_output, error_rate=error_rate)
-        conv1_output = self.relu(conv1_output)
-        if compute_grad:
-            self.corr_conv.compute_grad(conv1_output, "conv1")
-        if suppress_errors:
-            conv1_output = self.corr_conv(x, conv1_output, self.conv1, "conv1")
-        
-        conv2_input = conv1_output
-        conv2_output = self.conv2(conv2_input)
-        if inject_faults:
-            conv2_output = self.bit_flip_fault_inj(conv2_output, error_rate=error_rate)
-        conv2_output = self.relu(conv2_output)
-        if compute_grad:
-            self.corr_conv.compute_grad(conv2_output, "conv2")
-        if suppress_errors:
-            conv2_output = self.corr_conv(conv2_input, conv2_output, self.conv2, "conv2")
-        
-        conv3_input = conv2_output
-        conv3_output = self.conv3(conv3_input)
-        if inject_faults:
-            conv3_output = self.bit_flip_fault_inj(conv3_output, error_rate=error_rate)
-        conv3_output = self.relu(conv3_output)
-        if compute_grad:
-            self.corr_conv.compute_grad(conv3_output, "conv3")
-        if suppress_errors:
-            conv3_output = self.corr_conv(conv3_input, conv3_output, self.conv3, "conv3")
-        
-        fc1_input = conv3_output.view(-1, 128 * 4 * 4)
+    def forward(self, x, compute_grad=False, inject_faults=False, suppress_errors=False, error_rate=0.0):        
+        fc1_input = x.view(-1, self.input_size)
         fc1_output = self.fc1(fc1_input)
         if inject_faults:
-            fc1_output = self.bit_flip_fault_inj(fc1_output, error_rate=error_rate)
-        fc1_output = self.relu(fc1_output)
+            fc1_output = flip_bits(fc1_output, error_rate=error_rate)
         if compute_grad:
             self.corr_dense.compute_grad(fc1_output, "fc1")
         if suppress_errors:
-            fc1_output = self.corr_dense(fc1_input, fc1_output, self.fc1, "fc1")
+            # fc1_output = self.corr_dense(fc1_input, fc1_output, self.fc1, "fc1")
+            fc1_output = self.corr_dense(self.fc1.weight, fc1_input, fc1_output, error_rate=error_rate)
         
-        fc2_input = fc1_output
+        fc2_input = self.relu(fc1_output)
         fc2_output = self.fc2(fc2_input)
         if inject_faults:
-            fc2_output = self.bit_flip_fault_inj(fc2_output, error_rate=error_rate)
+            fc2_output = flip_bits(fc2_output, error_rate=error_rate)
         if compute_grad:
             self.corr_dense.compute_grad(fc2_output, "fc2")
         if suppress_errors:
-            fc2_output = self.corr_dense(fc2_input, fc2_output, self.fc2, "fc2")
+            # fc2_output = self.corr_dense(fc2_input, fc2_output, self.fc2, "fc2")
+            fc2_output = self.corr_dense(self.fc2.weight, fc2_input, fc2_output, error_rate=error_rate)
         
         return fc2_output
-    
-    def bit_flip_fault_inj(self, output, error_rate):
-        # Flatten tensor for easier manipulation
-        flat_output = output.view(-1)
-
-        # Convert float tensor to int representation (IEEE 754)
-        float_bits = flat_output.to(torch.float32).cpu().numpy().view(np.uint32)
-
-        # Randomly select bits to flip
-        num_elements = flat_output.numel()
-        random_bits = np.random.randint(0, 32, size=num_elements, dtype=np.uint32)
-
-        # Create a mask to determine which values to flip
-        flip_mask = np.random.rand(num_elements) < error_rate
-
-        # Perform bitwise XOR only for selected neurons
-        flipped_bits = float_bits ^ (1 << random_bits)
-
-        # Replace only values where flip_mask is True
-        float_bits[flip_mask] = flipped_bits[flip_mask]
-
-        # Convert back to PyTorch tensor
-        modified_output = torch.tensor(float_bits.view(np.float32), dtype=torch.float32, device=output.device).view(output.shape)
-
-        return modified_output

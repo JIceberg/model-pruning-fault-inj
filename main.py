@@ -80,14 +80,14 @@ def get_weight_distribution(model):
     plt.title('Weight Distribution of Model')
     plt.show()
 
-model = MNISTClassifier(hidden_size).to(device)
+model = MNISTClassifier(input_size, num_classes, hidden_size=hidden_size).to(device)
 print(model)
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
-if os.path.exists("unpruned_cnn_model.pth"):
-    model.load_state_dict(torch.load("unpruned_cnn_model.pth", weights_only=True))
+if os.path.exists("unpruned_model.pth"):
+    model.load_state_dict(torch.load("unpruned_model.pth", weights_only=True))
 else:
     for epoch in range(num_epochs):
         for images, labels in train_loader:
@@ -102,8 +102,8 @@ else:
 
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}")
 
-    if not os.path.exists("unpruned_cnn_model.pth"):    
-        torch.save(model.state_dict(), "unpruned_cnn_model.pth")
+    if not os.path.exists("unpruned_model.pth"):    
+        torch.save(model.state_dict(), "unpruned_model.pth")
     
     correct = 0
     total = 0
@@ -153,12 +153,12 @@ else:
         accuracy = correct / total
         print(f"Test Accuracy after Prune #{i+1}: {100. * accuracy:.2f}%")
 
-    torch.save(model.state_dict(), "pruned_cnn_model.pth")
+    torch.save(model.state_dict(), "pruned_model.pth")
 
 count_zero_nonzero_weights(model)
 
 def plot_accuracy_no_correction_vs_correction(model, tests):
-    error_rates = [0, 0.00001, 0.0001, 0.001, 0.01, 0.1, 1]
+    error_rates = [0, 1e-7, 5e-7, 1e-6, 5e-6, 1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2]
     unsupressed_accuracies = []
     suppressed_accuracies = []
 
@@ -197,57 +197,20 @@ def plot_accuracy_no_correction_vs_correction(model, tests):
     plt.xlabel("Error Rate")
     plt.ylabel("Accuracy")
     plt.legend()
-    plt.title("Model Accuracy vs. Error Rate")
+    plt.title("Unpruned Model Accuracy vs. Error Rate")
     plt.show()
 
 model.eval()
 
-correct = 0
-total = 0
-with torch.no_grad():
-    # clean run
-    for images, labels in test_loader:
-        images, labels = images.to(device), labels.to(device)
-        outputs = model(images)
-        _, predicted = torch.max(outputs, 1)
-        total += labels.size(0)
-        correct += (predicted == labels).sum().item()
-
-accuracy = 100 * correct / total
-print(f"Test Accuracy on Clean Run: {accuracy:.2f}%")
-
-correct = 0
-total = 0
-with torch.no_grad():
-    # faulty run, no correction
-    for images, labels in test_loader:
-        images, labels = images.to(device), labels.to(device)
-        outputs = model(images, inject_faults=True, error_rate=0.1)
-        _, predicted = torch.max(outputs, 1)
-        total += labels.size(0)
-        correct += (predicted == labels).sum().item()
-
-accuracy = 100 * correct / total
-print(f"Test Accuracy with Error Rate 0.1: {accuracy:.2f}%")
-
-correct = 0
-total = 0
-with torch.no_grad():
-    # compute gradient statistics
-    print("computing gradients...")
-    for images, labels in train_loader:
-        images, labels = images.to(device), labels.to(device)
-        outputs = model(images, compute_grad=True)
-    print("finished computing")
-
-    for images, labels in test_loader:
-        images, labels = images.to(device), labels.to(device)
-        outputs = model(images, inject_faults=True, suppress_errors=True, error_rate=0.1)
-        _, predicted = torch.max(outputs, 1)
-        total += labels.size(0)
-        correct += (predicted == labels).sum().item()
-
-accuracy = 100 * correct / total
-print(f"Test Accuracy with Error Correction: {accuracy:.2f}%")
+# correct = 0
+# total = 0
+# with torch.no_grad():
+#     # clean run
+#     for images, labels in test_loader:
+#         images, labels = images.to(device), labels.to(device)
+#         outputs = model(images, compute_grad=True)
+#         _, predicted = torch.max(outputs, 1)
+#         total += labels.size(0)
+#         correct += (predicted == labels).sum().item()
 
 plot_accuracy_no_correction_vs_correction(model, test_loader)
